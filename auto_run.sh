@@ -1,5 +1,5 @@
 if [ -z "$1" ]; then
-  echo "Usage: ./script.sh <source.c>"
+  echo "Usage: ./auto_run.sh <source.c>"
   exit 1
 fi
 
