@@ -11,6 +11,6 @@ cmake -DLLVM_DIR="$LLVM_DIR/lib/cmake/llvm" ..
 make
 cd ..
 
-"$LLVM_DIR/bin/clang" -O1 -emit-llvm -S "$SOURCE_FILE" -o "$LLVM_IR"
+"$LLVM_DIR/bin/clang" -g -O1 -emit-llvm -S "$SOURCE_FILE" -o "$LLVM_IR"
 
 "$LLVM_DIR/bin/opt" -load-pass-plugin ./build/libTaintTracker.so -passes=taint-tracker -disable-output "$LLVM_IR"
