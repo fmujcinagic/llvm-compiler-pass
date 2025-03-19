@@ -3,7 +3,7 @@
 #include "llvm/Passes/PassPlugin.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/IR/Module.h"
-
+#include "Helpers.hpp"
 
 using namespace llvm;
 
@@ -22,22 +22,30 @@ struct TaintTrackerPass : public PassInfoMixin<TaintTrackerPass> { // inheriting
             }
             return false;
         }
-        
-        // debug helper
-        void printDebugInfo(Instruction *Inst) {
-            if (DILocation *Loc = Inst->getDebugLoc()) {
-                unsigned Line = Loc->getLine();
-                StringRef File = Loc->getFilename();
-                errs() << "  at " << File << ":" << Line << "\n";
-            } else {
-                errs() << "  at [Unknown Location]\n";
-            }
-        }
 
         // helper function to check if passed value is tainted
         bool isTainted(Value *value) {
-            return tainted_values.find(value) != tainted_values.end();
+            if(!value) return false;
+            if (tainted_values.find(value) != tainted_values.end()) {
+                return true;
+            }
+            return false;
         }
+        bool isTaintedRecursive(Value *value){
+            if(!value) return false;
+            if (tainted_values.find(value) != tainted_values.end()) {
+                return true;
+            }
+            if (auto *Inst = dyn_cast<Instruction>(value)) {
+                for (auto &Op : Inst->operands()) {
+                    if (isTainted(Op.get())) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
 
         // helper function to mark value as tainted
         void markTainted(Value *value, Instruction *Inst = nullptr) {
@@ -46,8 +54,8 @@ struct TaintTrackerPass : public PassInfoMixin<TaintTrackerPass> { // inheriting
                 errs() << "[!] Already tainted: " << *value << "\n";
                 return;
             }
-            errs() << "==> Marking as tainted: " << *value << "\n";
-            if (Inst) printDebugInfo(Inst);
+            errs() << "==> Tainting:" << *value;
+            if (Inst) TaintAnalysis::Helpers::printDebugInfo(Inst);
             tainted_values.insert(value);
         }
         
@@ -85,7 +93,31 @@ struct TaintTrackerPass : public PassInfoMixin<TaintTrackerPass> { // inheriting
                 if (isTainted(loadInst->getPointerOperand())) {
                     markTainted(loadInst, loadInst);
                 }
-            }          
+            }
+            
+            // pointer operations on tainted pointers produce tainted pointers
+            // example: char *ptr = tainted_ptr + 10;
+            if (isa<BitCastInst>(&Inst) || isa<GetElementPtrInst>(&Inst)) {
+                for (auto &op : Inst.operands()) {
+                    if (isTainted(op.get())) {
+                        markTainted(&Inst, &Inst);
+                        break;
+                    }
+                }
+            }
+            
+            // example:
+            // int tainted = input_from_user();  
+            // int x = tainted + 5;         
+            if (Inst.isBinaryOp()) {
+                for (auto &op : Inst.operands()) {
+                    if (isTainted(op.get())) {
+                        markTainted(&Inst, &Inst);
+                        break;
+                    }
+                }
+            }
+          
         }
     public: 
         PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM) { 
@@ -102,17 +134,19 @@ struct TaintTrackerPass : public PassInfoMixin<TaintTrackerPass> { // inheriting
                                 }
                                 if(contains(CI->getCalledFunction()->getName(), sinks)) {
                                     for (auto &arg : CI->args()) {
-                                        errs() << "now printing args: " << *arg << "\n";
-                                        if (isTainted(arg.get())) {
-                                            errs() << "[!] Tainted value used in sink function " << CI->getCalledFunction()->getName() << ": " << *arg << "\n";
+                                        if (isTaintedRecursive(arg.get())) {
+                                            errs() << Colors::RED << "WARNING: Tainted value used in sink function " << CI->getCalledFunction()->getName() << Colors::RESET;
+                                            if (&Inst) TaintAnalysis::Helpers::printDebugInfo(&Inst);
                                         }
                                     }
                                 }
                             }
                         }
-                        // check if inst not null
-                        
-                        propagateTaint(Inst);
+                        if(&Inst != nullptr)
+                            propagateTaint(Inst);
+                        else
+                            {errs() << "Cannot propagate taint\n";
+                            assert(0);}
                     }
                 }
             }

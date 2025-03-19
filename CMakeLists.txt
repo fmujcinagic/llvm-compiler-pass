@@ -10,7 +10,7 @@ link_directories(${LLVM_LIBRARY_DIRS})
 
 add_definitions(${LLVM_DEFINITIONS})
 
-add_library(TaintTracker SHARED TaintTracker.cpp)
+add_library(TaintTracker SHARED TaintTracker.cpp Helpers.cpp)
 
 target_link_libraries(TaintTracker
   "$<$<PLATFORM_ID:Darwin>:-undefined dynamic_lookup>")
