@@ -36,6 +36,19 @@ struct TaintTrackerPass : public PassInfoMixin<TaintTrackerPass> { // inheriting
             if (tainted_values.find(value) != tainted_values.end()) {
                 return true;
             }
+            if (auto *GEP = dyn_cast<GetElementPtrInst>(value)) {
+                if (isTainted(GEP->getPointerOperand())) {
+                    return true;
+                }
+                Value *basePtr = GEP->getPointerOperand();
+                for (auto *taintedVal : tainted_values) {
+                    if (auto *otherGEP = dyn_cast<GetElementPtrInst>(taintedVal)) {
+                        if (otherGEP->getPointerOperand() == basePtr) {
+                            return true;
+                        }
+                    }
+                }
+            }
             if (auto *Inst = dyn_cast<Instruction>(value)) {
                 for (auto &Op : Inst->operands()) {
                     if (isTainted(Op.get())) {
@@ -64,11 +77,17 @@ struct TaintTrackerPass : public PassInfoMixin<TaintTrackerPass> { // inheriting
             // for(Use &U : CI->operands()) {
             //     errs() << "fgets arg: " << *U << "\n";
             // }
-            if(CI->getCalledFunction()->getName().contains("scanf")) {
-                markTainted(CI->getOperand(1), CI);
-            }
-            if(CI->getCalledFunction()->getName().contains("fgets")) {
-                markTainted(CI->getOperand(0), CI);
+            if(!CI || !CI->getCalledFunction()) return;
+            // if(CI->getCalledFunction()->getName().contains("scanf")) {
+            //     markTainted(CI->getOperand(1), CI);
+            // }
+            // if(CI->getCalledFunction()->getName().contains("fgets")) {
+            //     markTainted(CI->getOperand(0), CI);
+            // }
+            if (contains(CI->getCalledFunction()->getName(), sources)) {
+                for (Use &U : CI->args()) {
+                    markTainted(U.get(), CI);
+                }
             }
         }
         
@@ -128,14 +147,29 @@ struct TaintTrackerPass : public PassInfoMixin<TaintTrackerPass> { // inheriting
                     for (auto &Inst : BB) {         
                         if (auto *CI = dyn_cast<CallInst>(&Inst)) {
                             if (CI->getCalledFunction() != nullptr) {
-                                if(contains(CI->getCalledFunction()->getName(), sources)) {
-                                    errs() << "Found source: " << CI->getCalledFunction()->getName() << " in " << F.getName() << "\n";
+                                llvm::StringRef func_name = CI->getCalledFunction()->getName();
+                                if(contains(func_name, sources)) {
+                                    errs() << "[+] Found source: " << func_name << " in " << F.getName();
+                                    if (&Inst) TaintAnalysis::Helpers::printDebugInfo(&Inst);
                                     handleCI(CI);
                                 }
-                                if(contains(CI->getCalledFunction()->getName(), sinks)) {
+                                else if(contains(func_name, sinks)) {
+                                    errs() << "[-] Found sink: " << func_name << " in " << F.getName();
                                     for (auto &arg : CI->args()) {
-                                        if (isTaintedRecursive(arg.get())) {
-                                            errs() << Colors::RED << "WARNING: Tainted value used in sink function " << CI->getCalledFunction()->getName() << Colors::RESET;
+                                        if (isTaintedRecursive(arg)) {
+                                            errs() << Colors::RED << "WARNING: Tainted value reached sink: " << func_name << Colors::RESET;
+                                            if (&Inst) TaintAnalysis::Helpers::printDebugInfo(&Inst);
+                                        }
+                                    }
+                                } 
+                                // other functions that can potentially have tainted arguments
+                                else { 
+                                    bool has_tainted_arg = false;
+                                    for (unsigned i = 0; i < CI->arg_size(); i++) {
+                                        Value *arg = CI->getArgOperand(i);
+                                        if (isTaintedRecursive(arg)) {
+                                            has_tainted_arg = true;
+                                            errs() << "Tainted value passed to function: " << func_name << " at argument " << i ;
                                             if (&Inst) TaintAnalysis::Helpers::printDebugInfo(&Inst);
                                         }
                                     }
