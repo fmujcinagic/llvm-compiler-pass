@@ -11,7 +11,7 @@ define dso_local i32 @main() #0 !dbg !22 {
   %1 = alloca i32, align 4
   %2 = alloca i32, align 4
   %3 = alloca i32, align 4
-  %4 = alloca [256 x i8], align 16
+  %4 = alloca [8 x i8], align 1
   %5 = alloca [8 x i8], align 1
   store i32 0, ptr %1, align 4
     #dbg_declare(ptr %2, !27, !DIExpression(), !28)
@@ -22,13 +22,13 @@ define dso_local i32 @main() #0 !dbg !22 {
   %8 = load i32, ptr %3, align 4, !dbg !33
   %9 = call i32 (ptr, ...) @printf(ptr noundef @.str.1, i32 noundef %8), !dbg !34
     #dbg_declare(ptr %4, !35, !DIExpression(), !39)
-    #dbg_declare(ptr %5, !40, !DIExpression(), !44)
-  %10 = getelementptr inbounds [8 x i8], ptr %5, i64 0, i64 0, !dbg !45
-  %11 = getelementptr inbounds [256 x i8], ptr %4, i64 0, i64 0, !dbg !45
-  %12 = load i32, ptr %3, align 4, !dbg !46
-  %13 = sext i32 %12 to i64, !dbg !46
-  call void @llvm.memcpy.p0.p0.i64(ptr align 1 %10, ptr align 16 %11, i64 %13, i1 false), !dbg !45
-  ret i32 0, !dbg !47
+    #dbg_declare(ptr %5, !40, !DIExpression(), !41)
+  %10 = getelementptr inbounds [8 x i8], ptr %5, i64 0, i64 0, !dbg !42
+  %11 = getelementptr inbounds [8 x i8], ptr %4, i64 0, i64 0, !dbg !42
+  %12 = load i32, ptr %3, align 4, !dbg !43
+  %13 = sext i32 %12 to i64, !dbg !43
+  call void @llvm.memcpy.p0.p0.i64(ptr align 1 %10, ptr align 1 %11, i64 %13, i1 false), !dbg !42
+  ret i32 0, !dbg !44
 }
 
 declare i32 @__isoc99_scanf(ptr noundef, ...) #1
@@ -48,7 +48,7 @@ attributes #2 = { nocallback nofree nounwind willreturn memory(argmem: readwrite
 
 !0 = !DIGlobalVariableExpression(var: !1, expr: !DIExpression())
 !1 = distinct !DIGlobalVariable(scope: null, file: !2, line: 6, type: !3, isLocal: true, isDefinition: true)
-!2 = !DIFile(filename: "testcases/vuln_simple.c", directory: "/home/faris/Documents/thesis/taint-tracker", checksumkind: CSK_MD5, checksum: "4a8c6c994346ff76271d48889f02a8b4")
+!2 = !DIFile(filename: "testcases/vuln_simple.c", directory: "/home/faris/Documents/thesis/taint-tracker", checksumkind: CSK_MD5, checksum: "6d19639b8089db52e208b53d8f6971a9")
 !3 = !DICompositeType(tag: DW_TAG_array_type, baseType: !4, size: 24, elements: !5)
 !4 = !DIBasicType(name: "char", size: 8, encoding: DW_ATE_signed_char)
 !5 = !{!6}
@@ -82,15 +82,12 @@ attributes #2 = { nocallback nofree nounwind willreturn memory(argmem: readwrite
 !33 = !DILocation(line: 8, column: 48, scope: !22)
 !34 = !DILocation(line: 8, column: 5, scope: !22)
 !35 = !DILocalVariable(name: "source", scope: !22, file: !2, line: 10, type: !36)
-!36 = !DICompositeType(tag: DW_TAG_array_type, baseType: !4, size: 2048, elements: !37)
+!36 = !DICompositeType(tag: DW_TAG_array_type, baseType: !4, size: 64, elements: !37)
 !37 = !{!38}
-!38 = !DISubrange(count: 256)
+!38 = !DISubrange(count: 8)
 !39 = !DILocation(line: 10, column: 10, scope: !22)
-!40 = !DILocalVariable(name: "destination", scope: !22, file: !2, line: 11, type: !41)
-!41 = !DICompositeType(tag: DW_TAG_array_type, baseType: !4, size: 64, elements: !42)
-!42 = !{!43}
-!43 = !DISubrange(count: 8)
-!44 = !DILocation(line: 11, column: 10, scope: !22)
-!45 = !DILocation(line: 12, column: 5, scope: !22)
-!46 = !DILocation(line: 12, column: 33, scope: !22)
-!47 = !DILocation(line: 13, column: 5, scope: !22)
+!40 = !DILocalVariable(name: "destination", scope: !22, file: !2, line: 11, type: !36)
+!41 = !DILocation(line: 11, column: 10, scope: !22)
+!42 = !DILocation(line: 12, column: 5, scope: !22)
+!43 = !DILocation(line: 12, column: 33, scope: !22)
+!44 = !DILocation(line: 13, column: 5, scope: !22)

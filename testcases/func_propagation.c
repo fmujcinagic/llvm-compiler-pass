@@ -1,14 +1,18 @@
 #include <stdio.h>
 #include <string.h>
 
-void process(char *input) {
+void third_final_vuln(char *input) {
     char buffer[20];
-    strcpy(buffer, input);
+    strcpy(buffer, input); // sink!
+}
+
+void process(char *input) {
+    third_final_vuln(input);
 }
 
 int main() {
     char user_input[50];
-    scanf("%49s", user_input);
+    scanf("%s", user_input);
     process(user_input);
     return 0;
 }

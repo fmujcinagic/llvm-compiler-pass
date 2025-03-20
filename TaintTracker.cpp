@@ -64,7 +64,7 @@ struct TaintTrackerPass : public PassInfoMixin<TaintTrackerPass> { // inheriting
         void markTainted(Value *value, Instruction *Inst = nullptr) {
             assert(value != nullptr && "Desired value is null!");
             if(isTainted(value)) {
-                errs() << "[!] Already tainted: " << *value << "\n";
+                // errs() << "[!] Already tainted: " << *value << "\n";
                 return;
             }
             errs() << "==> Tainting:" << *value;
@@ -78,17 +78,17 @@ struct TaintTrackerPass : public PassInfoMixin<TaintTrackerPass> { // inheriting
             //     errs() << "fgets arg: " << *U << "\n";
             // }
             if(!CI || !CI->getCalledFunction()) return;
-            // if(CI->getCalledFunction()->getName().contains("scanf")) {
-            //     markTainted(CI->getOperand(1), CI);
-            // }
+            if(CI->getCalledFunction()->getName().contains("scanf")) {
+                markTainted(CI->getOperand(1), CI);
+            }
             // if(CI->getCalledFunction()->getName().contains("fgets")) {
             //     markTainted(CI->getOperand(0), CI);
             // }
-            if (contains(CI->getCalledFunction()->getName(), sources)) {
-                for (Use &U : CI->args()) {
-                    markTainted(U.get(), CI);
-                }
-            }
+            // if (contains(CI->getCalledFunction()->getName(), sources)) {
+            //     for (Use &U : CI->args()) {
+            //         markTainted(U.get(), CI);
+            //     }
+            // }
         }
         
         void propagateTaint(Instruction &Inst) {
@@ -141,6 +141,65 @@ struct TaintTrackerPass : public PassInfoMixin<TaintTrackerPass> { // inheriting
     public: 
         PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM) { 
             errs() << "-----------------Taint Tracker-----------------\n";
+            // 1st step: Identify all sources and initial taint
+            for (auto &F : M.functions()) {
+                for (auto &BB : F) {                
+                    // errs() << "tracking function: " << F.getName() << "\n";
+                    for (auto &Inst : BB) {         
+                        if (auto *CI = dyn_cast<CallInst>(&Inst)) {
+                            if (CI->getCalledFunction() != nullptr) {
+                                if(contains(CI->getCalledFunction()->getName(), sources)) {
+                                    errs() << "[+] Found source: " << CI->getCalledFunction()->getName() << " in " << F.getName();
+                                    if (&Inst) TaintAnalysis::Helpers::printDebugInfo(&Inst);
+                                    handleCI(CI);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // 2nd step: Propagate taint
+            errs() << " --- TAINT PROPAGATION STARTED! ---\n";
+            bool changed = true;
+            int iteration = 0;
+            const int MAX_ITERATIONS = 10; // chosen 10 for now, for iterative approach ; TODO: discuss 
+            while (changed && iteration < MAX_ITERATIONS) {
+                size_t tainted_before = tainted_values.size();
+                iteration++;
+                
+                for (auto &F : M.functions()) {
+                    for (auto &BB : F) {
+                        for (auto &Inst : BB) {
+                            if (auto *CI = dyn_cast<CallInst>(&Inst)) {
+                                if (CI->getCalledFunction() && !contains(CI->getCalledFunction()->getName(), sources)) {
+                                    for (unsigned i = 0; i < CI->arg_size(); i++) {
+                                        Value *arg = CI->getArgOperand(i);
+                                        if (isTaintedRecursive(arg)) {
+                                            errs() << "Tainted value passed to function: " << CI->getCalledFunction()->getName() << " at argument " << i;
+                                            if (&Inst) TaintAnalysis::Helpers::printDebugInfo(&Inst);
+                                            
+                                            // taint func params
+                                            if (Function *calledFunc = CI->getCalledFunction()) {
+                                                if (!calledFunc->isDeclaration() && i < calledFunc->arg_size()) { // we want to check for declaration to see if a func has a body in our module
+                                                    markTainted(calledFunc->getArg(i), &Inst);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            propagateTaint(Inst);
+                        }
+                    }
+                }
+                
+                changed = (tainted_values.size() > tainted_before);
+                if (changed) {
+                    errs() << ">> Iteration " << iteration << "; Found " << (tainted_values.size() - tainted_before) << " new tainted values\n";
+                }
+            }
+            errs() << " --- TAINT PROPAGATION ENDED! ---\n";
+            // 3rd step: Check for sinks
             for (auto &F : M.functions()) {
                 for (auto &BB : F) {                
                     // errs() << "tracking function: " << F.getName() << "\n";
@@ -148,13 +207,7 @@ struct TaintTrackerPass : public PassInfoMixin<TaintTrackerPass> { // inheriting
                         if (auto *CI = dyn_cast<CallInst>(&Inst)) {
                             if (CI->getCalledFunction() != nullptr) {
                                 llvm::StringRef func_name = CI->getCalledFunction()->getName();
-                                if(contains(func_name, sources)) {
-                                    errs() << "[+] Found source: " << func_name << " in " << F.getName();
-                                    if (&Inst) TaintAnalysis::Helpers::printDebugInfo(&Inst);
-                                    handleCI(CI);
-                                }
-                                else if(contains(func_name, sinks)) {
-                                    errs() << "[-] Found sink: " << func_name << " in " << F.getName();
+                                if(contains(func_name, sinks)) {
                                     for (auto &arg : CI->args()) {
                                         if (isTaintedRecursive(arg)) {
                                             errs() << Colors::RED << "WARNING: Tainted value reached sink: " << func_name << Colors::RESET;
@@ -162,28 +215,16 @@ struct TaintTrackerPass : public PassInfoMixin<TaintTrackerPass> { // inheriting
                                         }
                                     }
                                 } 
-                                // other functions that can potentially have tainted arguments
-                                else { 
-                                    bool has_tainted_arg = false;
-                                    for (unsigned i = 0; i < CI->arg_size(); i++) {
-                                        Value *arg = CI->getArgOperand(i);
-                                        if (isTaintedRecursive(arg)) {
-                                            has_tainted_arg = true;
-                                            errs() << "Tainted value passed to function: " << func_name << " at argument " << i ;
-                                            if (&Inst) TaintAnalysis::Helpers::printDebugInfo(&Inst);
-                                        }
-                                    }
-                                }
                             }
                         }
-                        if(&Inst != nullptr)
-                            propagateTaint(Inst);
-                        else
-                            {errs() << "Cannot propagate taint\n";
-                            assert(0);}
                     }
                 }
-            }
+            }            
+            // errs() << "Tainted values: \n";
+            // for (auto *val : tainted_values) {
+            //     errs() << *val << "\n";
+            // }
+            
             errs() << "--------------- Taint Tracking Complete ---------------\n";
             return PreservedAnalyses::all();
         };
