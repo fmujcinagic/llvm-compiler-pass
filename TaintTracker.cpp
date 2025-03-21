@@ -78,20 +78,47 @@ struct TaintTrackerPass : public PassInfoMixin<TaintTrackerPass> { // inheriting
             //     errs() << "fgets arg: " << *U << "\n";
             // }
             if(!CI || !CI->getCalledFunction()) return;
-            if(CI->getCalledFunction()->getName().contains("scanf")) {
-                markTainted(CI->getOperand(1), CI);
+            if (contains(CI->getCalledFunction()->getName(), sources)) {
+                for (Use &U : CI->args()) {
+                    markTainted(U.get(), CI);
+                }
+            } else {
+                Function *calledFunc = CI->getCalledFunction();
+                errs() << "[-] Ignoring call to: " << calledFunc->getName() << "\n";
             }
+            // if(CI->getCalledFunction()->getName().contains("scanf")) {
+            //     markTainted(CI->getOperand(1), CI);
+            // }
             // if(CI->getCalledFunction()->getName().contains("fgets")) {
             //     markTainted(CI->getOperand(0), CI);
-            // }
-            // if (contains(CI->getCalledFunction()->getName(), sources)) {
-            //     for (Use &U : CI->args()) {
-            //         markTainted(U.get(), CI);
-            //     }
             // }
         }
         
         void propagateTaint(Instruction &Inst) {
+            auto *retInst = dyn_cast<ReturnInst>(&Inst);
+            if (retInst) {
+                if (Value *retVal = retInst->getReturnValue()) {
+                    if (isTainted(retVal)) {
+                        markTainted(&Inst, &Inst); // Mark ReturnInst as tainted (indirectly marks function return)
+                    }
+                }
+            }
+            
+            if (auto *callInst = dyn_cast<CallInst>(&Inst)) {
+                Function *calledFunc = callInst->getCalledFunction();
+                if (calledFunc && !calledFunc->isDeclaration()) {
+                    for (auto &BB : *calledFunc) {
+                        for (auto &I : BB) {
+                            if (auto *retInst = dyn_cast<ReturnInst>(&I)) {
+                                if (isTainted(retInst->getReturnValue())) {
+                                    markTainted(callInst, callInst); // Mark CallInst itself tainted
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             // If %val is tainted → then mark %ptr as tainted.
             // example:
             // int tainted = input_from_user();
@@ -175,8 +202,8 @@ struct TaintTrackerPass : public PassInfoMixin<TaintTrackerPass> { // inheriting
                                     for (unsigned i = 0; i < CI->arg_size(); i++) {
                                         Value *arg = CI->getArgOperand(i);
                                         if (isTaintedRecursive(arg)) {
-                                            errs() << "Tainted value passed to function: " << CI->getCalledFunction()->getName() << " at argument " << i;
-                                            if (&Inst) TaintAnalysis::Helpers::printDebugInfo(&Inst);
+                                            // errs() << "Tainted value passed to function: " << CI->getCalledFunction()->getName() << " at argument " << i;
+                                            // if (&Inst) TaintAnalysis::Helpers::printDebugInfo(&Inst);
                                             
                                             // taint func params
                                             if (Function *calledFunc = CI->getCalledFunction()) {
@@ -194,9 +221,9 @@ struct TaintTrackerPass : public PassInfoMixin<TaintTrackerPass> { // inheriting
                 }
                 
                 changed = (tainted_values.size() > tainted_before);
-                if (changed) {
-                    errs() << ">> Iteration " << iteration << "; Found " << (tainted_values.size() - tainted_before) << " new tainted values\n";
-                }
+                // if (changed) {
+                //     errs() << ">> Iteration " << iteration << "; Found " << (tainted_values.size() - tainted_before) << " new tainted values\n";
+                // }
             }
             errs() << " --- TAINT PROPAGATION ENDED! ---\n";
             // 3rd step: Check for sinks
