@@ -10,6 +10,7 @@ using namespace llvm;
 const std::set<std::string> sources = {"scanf", "fgets", "read"};
 const std::set<std::string> sinks = {"strcpy", "sprintf", "memcpy", "system"};
 llvm::DenseSet<Value *> tainted_values; // tracking IR values
+llvm::DenseMap<Value*, Value*> pointer_aliases;
 
 struct TaintTrackerPass : public PassInfoMixin<TaintTrackerPass> { // inheriting from PassInfoMixin, modern way to write LLVM passes (for LLVM >= 11)
     private:
@@ -29,13 +30,31 @@ struct TaintTrackerPass : public PassInfoMixin<TaintTrackerPass> { // inheriting
             if (tainted_values.find(value) != tainted_values.end()) {
                 return true;
             }
+            auto it = pointer_aliases.find(value);
+            if (it != pointer_aliases.end() && tainted_values.find(it->second) != tainted_values.end()) {
+                return true;
+            }
             return false;
         }
         bool isTaintedRecursive(Value *value){
             if(!value) return false;
-            if (tainted_values.find(value) != tainted_values.end()) {
+            if (isTainted(value)) {
                 return true;
             }
+            Value* current = value;
+            while (pointer_aliases.find(current) != pointer_aliases.end()) {
+                current = pointer_aliases[current];
+                if (isTainted(current)) {
+                    return true;
+                }
+            }
+            // Also check the reverse alias chain
+            for (const auto &pair : pointer_aliases) {
+                if (pair.second == value && isTainted(pair.first)) {
+                    return true;
+                }
+            }
+            
             if (auto *GEP = dyn_cast<GetElementPtrInst>(value)) {
                 if (isTainted(GEP->getPointerOperand())) {
                     return true;
@@ -70,30 +89,110 @@ struct TaintTrackerPass : public PassInfoMixin<TaintTrackerPass> { // inheriting
             errs() << "==> Tainting:" << *value;
             if (Inst) TaintAnalysis::Helpers::printDebugInfo(Inst);
             tainted_values.insert(value);
+
+            for (const auto &pair : pointer_aliases) {
+                if (pair.second == value) {
+                    if(isTainted(pair.first)) return;
+                    errs() << "==> Tainting:" << pair.first;
+                    if (Inst) TaintAnalysis::Helpers::printDebugInfo(Inst);
+                    tainted_values.insert(pair.first);
+                }
+            }
         }
         
         void handleCI(CallInst *CI) {
-            // errs() << "this is ci: " << CI << "\n";
-            // for(Use &U : CI->operands()) {
-            //     errs() << "fgets arg: " << *U << "\n";
-            // }
             if(!CI || !CI->getCalledFunction()) return;
             if (contains(CI->getCalledFunction()->getName(), sources)) {
-                for (Use &U : CI->args()) {
-                    markTainted(U.get(), CI);
+                // For scanf, fgets, etc. we need to taint all pointer arguments
+                for (unsigned i = 0; i < CI->arg_size(); i++) {
+                    Value *arg = CI->getArgOperand(i);
+                    if (arg->getType()->isPointerTy()) {
+                        markTainted(arg, CI);
+                        
+                        // Check if this is a load instruction (like what we see with alias = ptr)
+                        if (auto *LI = dyn_cast<LoadInst>(arg)) {
+                            markTainted(LI->getPointerOperand(), CI);
+                        }
+                        
+                        // If it's a pointer to a pointer, follow the chain
+                        if (auto *loadInst = dyn_cast<LoadInst>(arg)) {
+                            if (auto *ptr = dyn_cast<AllocaInst>(loadInst->getPointerOperand())) {
+                                tainted_values.insert(ptr);
+                            }
+                        }
+                    }
                 }
             } else {
                 Function *calledFunc = CI->getCalledFunction();
                 errs() << "[-] Ignoring call to: " << calledFunc->getName() << "\n";
             }
-            // if(CI->getCalledFunction()->getName().contains("scanf")) {
-            //     markTainted(CI->getOperand(1), CI);
-            // }
-            // if(CI->getCalledFunction()->getName().contains("fgets")) {
-            //     markTainted(CI->getOperand(0), CI);
-            // }
         }
+
+        // void handleCI(CallInst *CI) {
+        //     // errs() << "this is ci: " << CI << "\n";
+        //     // for(Use &U : CI->operands()) {
+        //     //     errs() << "fgets arg: " << *U << "\n";
+        //     // }
+        //     if(!CI || !CI->getCalledFunction()) return;
+        //     if (contains(CI->getCalledFunction()->getName(), sources)) {
+        //         for (Use &U : CI->args()) {
+        //             markTainted(U.get(), CI);
+                    
+        //             if (U.get()->getType()->isPointerTy()) {
+        //                 auto *load_instr = dyn_cast<LoadInst>(U.get());
+        //                 // TODO: recheck again later ... 
+        //                 if(load_instr) {
+        //                     markTainted(load_instr->getPointerOperand(), CI); //like what we see with alias = ptr)
+        //                     auto *ptr = dyn_cast<AllocaInst>(load_instr->getPointerOperand());
+        //                     if(ptr) {
+        //                         pointer_aliases[ptr] = load_instr->getPointerOperand(); // we just follow the chain
+        //                     }
+        //                 }
+
+        //             }
+        //         }
+        //     }
+        //     // if(CI->getCalledFunction()->getName().contains("scanf")) {
+        //     //     markTainted(CI->getOperand(1), CI);
+        //     // }
+        //     // if(CI->getCalledFunction()->getName().contains("fgets")) {
+        //     //     markTainted(CI->getOperand(0), CI);
+        //     // }
+        // }
         
+        void trackAliases(Instruction &Inst) {
+            auto *storeInst = dyn_cast<StoreInst>(&Inst);
+            if (storeInst) {
+                Value *valueOp = storeInst->getValueOperand();
+                Value *ptrOp = storeInst->getPointerOperand();
+                
+                if (valueOp && valueOp->getType() && valueOp->getType()->isPointerTy() && ptrOp) {
+                    // This is a pointer assignment: ptr1 = ptr2
+                    pointer_aliases[ptrOp] = valueOp;
+                    errs() << "==> Recording alias: " << *ptrOp << " -> " << *valueOp;
+                    TaintAnalysis::Helpers::printDebugInfo(&Inst);
+                }
+            }
+            
+            // Handle function arguments for aliasing
+            if (auto *callInst = dyn_cast<CallInst>(&Inst)) {
+                Function *calledFunc = callInst->getCalledFunction();
+                if (calledFunc && !calledFunc->isDeclaration()) {
+                    // For each pointer argument, create an alias between the formal and actual parameter
+                    for (unsigned i = 0; i < callInst->arg_size() && i < calledFunc->arg_size(); i++) {
+                        Value *actualArg = callInst->getArgOperand(i);
+                        Value *formalArg = calledFunc->getArg(i);
+                        
+                        if (actualArg->getType()->isPointerTy()) {
+                            pointer_aliases[formalArg] = actualArg;
+                            errs() << "==> Recording parameter alias: " << *formalArg << " -> " << *actualArg;
+                            TaintAnalysis::Helpers::printDebugInfo(&Inst);
+                        }
+                    }
+                }
+            }
+        }
+
         void propagateTaint(Instruction &Inst) {
             auto *retInst = dyn_cast<ReturnInst>(&Inst);
             if (retInst) {
@@ -107,10 +206,18 @@ struct TaintTrackerPass : public PassInfoMixin<TaintTrackerPass> { // inheriting
             if (auto *callInst = dyn_cast<CallInst>(&Inst)) {
                 Function *calledFunc = callInst->getCalledFunction();
                 if (calledFunc && !calledFunc->isDeclaration()) {
+
+                    for (unsigned i = 0; i < callInst->arg_size() && i < calledFunc->arg_size(); i++) {
+                        Value *arg = callInst->getArgOperand(i);
+                        if (isTaintedRecursive(arg)) {
+                            markTainted(calledFunc->getArg(i), &Inst);
+                        }
+                    }
+
                     for (auto &BB : *calledFunc) {
                         for (auto &I : BB) {
                             if (auto *retInst = dyn_cast<ReturnInst>(&I)) {
-                                if (isTainted(retInst->getReturnValue())) {
+                                if (isTaintedRecursive(retInst->getReturnValue())) { // tainted check to recursive one
                                     markTainted(callInst, callInst); // Mark CallInst itself tainted
                                     break;
                                 }
@@ -125,8 +232,11 @@ struct TaintTrackerPass : public PassInfoMixin<TaintTrackerPass> { // inheriting
             // int unsafe; unsafe = tainted;  // 'unsafe' becomes tainted
             auto *storeInst = dyn_cast<StoreInst>(&Inst);
             if(storeInst) { 
-                if(isTainted(storeInst->getValueOperand())) {
+                if(isTaintedRecursive(storeInst->getValueOperand())) { // tainted check to recursive one
                     markTainted(storeInst->getPointerOperand(), storeInst);
+                    if (auto *LI = dyn_cast<LoadInst>(storeInst->getPointerOperand())) {
+                        markTainted(LI->getPointerOperand(), storeInst);
+                    }
                 }
             }
             
@@ -136,8 +246,13 @@ struct TaintTrackerPass : public PassInfoMixin<TaintTrackerPass> { // inheriting
             // int x = tainted;     
             auto *loadInst = dyn_cast<LoadInst>(&Inst);
             if (loadInst) {
-                if (isTainted(loadInst->getPointerOperand())) {
+                if (isTaintedRecursive(loadInst->getPointerOperand())) {
                     markTainted(loadInst, loadInst);
+                }
+                for (const auto &pair : pointer_aliases) {
+                    if (pair.first == loadInst->getPointerOperand() && isTaintedRecursive(pair.second)) {
+                        markTainted(loadInst, loadInst);
+                    }
                 }
             }
             
@@ -168,6 +283,17 @@ struct TaintTrackerPass : public PassInfoMixin<TaintTrackerPass> { // inheriting
     public: 
         PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM) { 
             errs() << "-----------------Taint Tracker-----------------\n";
+
+            errs() << " --- ALIAS TRACKING STARTED! ---\n";
+            for (auto &F : M.functions()) {
+                for (auto &BB : F) {                
+                    for (auto &Inst : BB) {         
+                        trackAliases(Inst);
+                    }
+                }
+            }
+            errs() << " --- ALIAS TRACKING COMPLETED! ---\n";
+
             // 1st step: Identify all sources and initial taint
             for (auto &F : M.functions()) {
                 for (auto &BB : F) {                
@@ -202,8 +328,8 @@ struct TaintTrackerPass : public PassInfoMixin<TaintTrackerPass> { // inheriting
                                     for (unsigned i = 0; i < CI->arg_size(); i++) {
                                         Value *arg = CI->getArgOperand(i);
                                         if (isTaintedRecursive(arg)) {
-                                            // errs() << "Tainted value passed to function: " << CI->getCalledFunction()->getName() << " at argument " << i;
-                                            // if (&Inst) TaintAnalysis::Helpers::printDebugInfo(&Inst);
+                                            errs() << "Tainted value passed to function: " << CI->getCalledFunction()->getName() << " at argument " << i;
+                                            if (&Inst) TaintAnalysis::Helpers::printDebugInfo(&Inst);
                                             
                                             // taint func params
                                             if (Function *calledFunc = CI->getCalledFunction()) {
@@ -251,6 +377,11 @@ struct TaintTrackerPass : public PassInfoMixin<TaintTrackerPass> { // inheriting
             // for (auto *val : tainted_values) {
             //     errs() << *val << "\n";
             // }
+            // Debug output for aliases
+            errs() << "\nPointer aliases (" << pointer_aliases.size() << "): \n";
+            for (const auto &pair : pointer_aliases) {
+                errs() << *pair.first << " -> " << *pair.second << "\n";
+            }
             
             errs() << "--------------- Taint Tracking Complete ---------------\n";
             return PreservedAnalyses::all();

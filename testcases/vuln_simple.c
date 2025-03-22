@@ -21,9 +21,12 @@ int main() {
     memcpy(destination, source, new_x); // dangerous, using tainted size in memcpy
 
     int tainted_y = vuln();
+    int *ptr = &tainted_y;
+    int z = *ptr;
+    printf("Value of z: %d\n", z); // should be tainted
+    
     char source2[8];
     char destination2[8];
     memcpy(destination2, source2, tainted_y); // dangerous, using tainted size in memcpy
-
     return 0;
 }
