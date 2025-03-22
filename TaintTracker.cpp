@@ -99,66 +99,38 @@ struct TaintTrackerPass : public PassInfoMixin<TaintTrackerPass> { // inheriting
                 }
             }
         }
-        
+            
         void handleCI(CallInst *CI) {
+            // errs() << "this is ci: " << CI << "\n";
+            // for(Use &U : CI->operands()) {
+            //     errs() << "fgets arg: " << *U << "\n";
+            // }
             if(!CI || !CI->getCalledFunction()) return;
             if (contains(CI->getCalledFunction()->getName(), sources)) {
-                // For scanf, fgets, etc. we need to taint all pointer arguments
-                for (unsigned i = 0; i < CI->arg_size(); i++) {
-                    Value *arg = CI->getArgOperand(i);
-                    if (arg->getType()->isPointerTy()) {
-                        markTainted(arg, CI);
-                        
-                        // Check if this is a load instruction (like what we see with alias = ptr)
-                        if (auto *LI = dyn_cast<LoadInst>(arg)) {
-                            markTainted(LI->getPointerOperand(), CI);
-                        }
-                        
-                        // If it's a pointer to a pointer, follow the chain
-                        if (auto *loadInst = dyn_cast<LoadInst>(arg)) {
-                            if (auto *ptr = dyn_cast<AllocaInst>(loadInst->getPointerOperand())) {
-                                tainted_values.insert(ptr);
+                for (Use &U : CI->args()) {
+                    markTainted(U.get(), CI);
+                    
+                    if (U.get()->getType()->isPointerTy()) {
+                        auto *load_instr = dyn_cast<LoadInst>(U.get());
+                        // TODO: recheck again later ... 
+                        if(load_instr) {
+                            markTainted(load_instr->getPointerOperand(), CI); //like what we see with alias = ptr)
+                            auto *ptr = dyn_cast<AllocaInst>(load_instr->getPointerOperand());
+                            if(ptr) {
+                                pointer_aliases[ptr] = load_instr->getPointerOperand(); // we just follow the chain
                             }
                         }
+
                     }
                 }
-            } else {
-                Function *calledFunc = CI->getCalledFunction();
-                errs() << "[-] Ignoring call to: " << calledFunc->getName() << "\n";
             }
+            // if(CI->getCalledFunction()->getName().contains("scanf")) {
+            //     markTainted(CI->getOperand(1), CI);
+            // }
+            // if(CI->getCalledFunction()->getName().contains("fgets")) {
+            //     markTainted(CI->getOperand(0), CI);
+            // }
         }
-
-        // void handleCI(CallInst *CI) {
-        //     // errs() << "this is ci: " << CI << "\n";
-        //     // for(Use &U : CI->operands()) {
-        //     //     errs() << "fgets arg: " << *U << "\n";
-        //     // }
-        //     if(!CI || !CI->getCalledFunction()) return;
-        //     if (contains(CI->getCalledFunction()->getName(), sources)) {
-        //         for (Use &U : CI->args()) {
-        //             markTainted(U.get(), CI);
-                    
-        //             if (U.get()->getType()->isPointerTy()) {
-        //                 auto *load_instr = dyn_cast<LoadInst>(U.get());
-        //                 // TODO: recheck again later ... 
-        //                 if(load_instr) {
-        //                     markTainted(load_instr->getPointerOperand(), CI); //like what we see with alias = ptr)
-        //                     auto *ptr = dyn_cast<AllocaInst>(load_instr->getPointerOperand());
-        //                     if(ptr) {
-        //                         pointer_aliases[ptr] = load_instr->getPointerOperand(); // we just follow the chain
-        //                     }
-        //                 }
-
-        //             }
-        //         }
-        //     }
-        //     // if(CI->getCalledFunction()->getName().contains("scanf")) {
-        //     //     markTainted(CI->getOperand(1), CI);
-        //     // }
-        //     // if(CI->getCalledFunction()->getName().contains("fgets")) {
-        //     //     markTainted(CI->getOperand(0), CI);
-        //     // }
-        // }
         
         void trackAliases(Instruction &Inst) {
             auto *storeInst = dyn_cast<StoreInst>(&Inst);
