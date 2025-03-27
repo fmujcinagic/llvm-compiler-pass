@@ -22,4 +22,4 @@ Put desired testcase written in C or `.ll` file that contains LLVM Intermediate 
 
 `chmod +x auto_run.sh`
 
-`./auto_run.sh testcases/primer_test.c`
+`./auto_run.sh testcases/vuln_simple.c`
