@@ -9,10 +9,11 @@ using namespace llvm;
 
 const std::set<std::string> sources = {"scanf", "fgets", "read", "copy_from_user", "get_user"}; // I've used normal set here
 const std::set<std::string> sinks = {"strcpy", "strncpy", "sprintf", "snprintf", "vsprintf", "vsnprintf",
-    "memcpy", "system", "memset", "strncpy", "write"}; // I've used normal set here
+    "memcpy", "system", "strncpy", "write"}; // I've used normal set here
 llvm::DenseSet<Value *> tainted_values; // tracking IR values
 llvm::DenseMap<Value*, Value*> pointer_aliases;
 llvm::DenseMap<Value*, Value*> points_to;
+llvm::DenseMap<Value*, std::vector<std::pair<Value*, int>>> struct_map;
 
 struct TaintTrackerPass : public PassInfoMixin<TaintTrackerPass> { // inheriting from PassInfoMixin, modern way to write LLVM passes (for LLVM >= 11)
     private:
@@ -37,6 +38,24 @@ struct TaintTrackerPass : public PassInfoMixin<TaintTrackerPass> { // inheriting
                 return true;
             }
             return false;
+        }
+        
+        void trackStructs(Instruction &Inst) {
+            if (auto *GEP = dyn_cast<GetElementPtrInst>(&Inst)) {
+                Value *basePtr = GEP->getPointerOperand();
+                
+                // check for structs
+                if (GEP->getNumOperands() >= 3) { // at least 3: base pointer, zero index and the field index in struct
+                    if (auto *CI = dyn_cast<ConstantInt>(GEP->getOperand(GEP->getNumOperands() - 1))) { // This is for the field index (usually the last operand ; currently only for simple structs)
+                        unsigned fieldIdx = CI->getZExtValue();
+                        
+ 
+                        struct_map[basePtr].push_back({GEP, fieldIdx}); // we record every field access, because a struct pointer can be used to access different fields at different points in the program
+                        errs() << "==> Recording struct field access: " << *basePtr << " field[" << fieldIdx << "] -> " << *GEP;
+                        TaintAnalysis::Helpers::printDebugInfo(&Inst);
+                    }
+                }
+            }
         }
 
         Value* getUltimatePointee(Value* ptr) {
@@ -99,6 +118,21 @@ struct TaintTrackerPass : public PassInfoMixin<TaintTrackerPass> { // inheriting
                         }
                     }
                 }
+
+                if (GEP->getNumOperands() >= 3) {
+                    if (auto *CI = dyn_cast<ConstantInt>(GEP->getOperand(GEP->getNumOperands() - 1))) {
+                        unsigned thisFieldIdx = CI->getZExtValue();
+                        auto it = struct_map.find(basePtr);
+                        if (it != struct_map.end()) {
+                            for (const auto &fieldPair : it->second) {
+                                if (fieldPair.second == thisFieldIdx && isTainted(fieldPair.first)) {
+                                    return true;
+                                }
+                            }
+                        }
+                        return false;
+                    }
+                }
             }
             if (auto *Inst = dyn_cast<Instruction>(value)) {
                 for (auto &Op : Inst->operands()) {
@@ -154,20 +188,40 @@ struct TaintTrackerPass : public PassInfoMixin<TaintTrackerPass> { // inheriting
                     markTainted(U.get(), CI);
                     
                     if (U.get()->getType()->isPointerTy()) {
-                        auto *load_instr = dyn_cast<LoadInst>(U.get());
-                        // TODO: recheck again later ... 
-                        if(load_instr) {
-                            markTainted(load_instr->getPointerOperand(), CI); //like what we see with alias = ptr
-                            auto *ptr = dyn_cast<AllocaInst>(load_instr->getPointerOperand());
-                            if(ptr) {
-                                pointer_aliases[ptr] = load_instr->getPointerOperand(); // we just follow the chain
-                            }
-                            Value* pointee = getUltimatePointee(load_instr->getPointerOperand()); // TODO: recheck!! 
-                            if (pointee) {
-                                markTainted(pointee, CI);
+                        auto *gep = dyn_cast<GetElementPtrInst>(U.get());
+                        if(gep) {
+                            Value *basePtr = gep->getPointerOperand();
+                    
+                            // taint this specific field, not the entire struct
+                            if (gep->getNumOperands() >= 3) {
+                                auto *inner_ci = dyn_cast<ConstantInt>(gep->getOperand(gep->getNumOperands() - 1));
+                                if(inner_ci) {
+                                    unsigned fieldIdx = inner_ci->getZExtValue();
+                                    
+                                    auto &accesses = struct_map[basePtr];
+                                    for (auto &pair : accesses) {
+                                        if (pair.second == fieldIdx) {
+                                            markTainted(pair.first, CI);
+                                        }
+                                    }
+                                }
                             }
                         }
-
+                        else {
+                            auto *load_instr = dyn_cast<LoadInst>(U.get());
+                            // TODO: recheck again later ... 
+                            if(load_instr) {
+                                markTainted(load_instr->getPointerOperand(), CI); //like what we see with alias = ptr
+                                auto *ptr = dyn_cast<AllocaInst>(load_instr->getPointerOperand());
+                                if(ptr) {
+                                    pointer_aliases[ptr] = load_instr->getPointerOperand(); // we just follow the chain
+                                }
+                                Value* pointee = getUltimatePointee(load_instr->getPointerOperand()); // TODO: recheck!! 
+                                if (pointee) {
+                                    markTainted(pointee, CI);
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -188,7 +242,7 @@ struct TaintTrackerPass : public PassInfoMixin<TaintTrackerPass> { // inheriting
                 if (valueOp && valueOp->getType() && valueOp->getType()->isPointerTy() && ptrOp) {
                     // This is a pointer assignment: ptr1 = ptr2
                     pointer_aliases[ptrOp] = valueOp;
-                    errs() << "==> Recording alias: " << *ptrOp << " -> " << *valueOp;
+                    errs() << "==> Recording alias: " << *ptrOp << "(destination) -> " << *valueOp << "(source)";
                     TaintAnalysis::Helpers::printDebugInfo(&Inst);
                 }
                 points_to[ptrOp] = valueOp;
@@ -328,15 +382,16 @@ struct TaintTrackerPass : public PassInfoMixin<TaintTrackerPass> { // inheriting
         PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM) { 
             errs() << "-----------------Taint Tracker-----------------\n";
 
-            errs() << " --- ALIAS TRACKING STARTED! ---\n";
+            errs() << " --- ALIAS (AND STRUCT) TRACKING STARTED! ---\n";
             for (auto &F : M.functions()) {
                 for (auto &BB : F) {                
                     for (auto &Inst : BB) {         
                         trackAliases(Inst);
+                        trackStructs(Inst);
                     }
                 }
             }
-            errs() << " --- ALIAS TRACKING COMPLETED! ---\n";
+            errs() << " --- ALIAS (AND STRUCT) TRACKING COMPLETED! ---\n";
 
             // 1st step: Identify all sources and initial taint
             for (auto &F : M.functions()) {
