@@ -9,11 +9,12 @@ using namespace llvm;
 
 const std::set<std::string> sources = {"scanf", "fgets", "read", "copy_from_user", "get_user"}; // I've used normal set here
 const std::set<std::string> sinks = {"strcpy", "strncpy", "sprintf", "snprintf", "vsprintf", "vsnprintf",
-    "memcpy", "system", "strncpy", "write"}; // I've used normal set here
+    "memcpy", "memset", "system", "strncpy", "write"}; // I've used normal set here
 llvm::DenseSet<Value *> tainted_values; // tracking IR values
 llvm::DenseMap<Value*, Value*> pointer_aliases;
 llvm::DenseMap<Value*, Value*> points_to;
 llvm::DenseMap<Value*, std::vector<std::pair<Value*, int>>> struct_map;
+// llvm::DenseSet<Value *> visited;
 
 struct TaintTrackerPass : public PassInfoMixin<TaintTrackerPass> { // inheriting from PassInfoMixin, modern way to write LLVM passes (for LLVM >= 11)
     private:
@@ -48,8 +49,7 @@ struct TaintTrackerPass : public PassInfoMixin<TaintTrackerPass> { // inheriting
                 if (GEP->getNumOperands() >= 3) { // at least 3: base pointer, zero index and the field index in struct
                     if (auto *CI = dyn_cast<ConstantInt>(GEP->getOperand(GEP->getNumOperands() - 1))) { // This is for the field index (usually the last operand ; currently only for simple structs)
                         unsigned fieldIdx = CI->getZExtValue();
-                        
- 
+
                         struct_map[basePtr].push_back({GEP, fieldIdx}); // we record every field access, because a struct pointer can be used to access different fields at different points in the program
                         errs() << "==> Recording struct field access: " << *basePtr << " field[" << fieldIdx << "] -> " << *GEP;
                         TaintAnalysis::Helpers::printDebugInfo(&Inst);
@@ -75,8 +75,19 @@ struct TaintTrackerPass : public PassInfoMixin<TaintTrackerPass> { // inheriting
             return current;
         }
 
-        bool isTaintedRecursive(Value *value){
+        bool isTaintedRecursive(Value *value) {
+            llvm::DenseSet<Value*> visited;
+            return isTaintedRecursiveWrapper(value, visited);
+        }
+        bool isTaintedRecursiveWrapper(Value *value, llvm::DenseSet<Value*> &visited){
             if(!value) return false;
+
+            if (visited.count(value) > 0) { //experiment
+                return false; 
+            }
+            
+            visited.insert(value); //experiment
+
             if (isTainted(value)) {
                 return true;
             }
@@ -115,20 +126,15 @@ struct TaintTrackerPass : public PassInfoMixin<TaintTrackerPass> { // inheriting
             
             auto *gep = dyn_cast<GetElementPtrInst>(value);
             if (gep) {
-                if (isTaintedRecursive(gep->getPointerOperand())) {
+                Value *base_ptr = gep->getPointerOperand();
+                if (isTainted(base_ptr) || isTaintedRecursiveWrapper(base_ptr, visited)) {
                     return true;
                 }
-                Value *base_ptr = gep->getPointerOperand();
-                if (gep->getNumOperands() >= 3) {
-                    if (auto *CI = dyn_cast<ConstantInt>(gep->getOperand(gep->getNumOperands() - 1))) {
-                        unsigned thisFieldIdx = CI->getZExtValue();
-                        auto it = struct_map.find(base_ptr);
-                        if (it != struct_map.end()) {
-                            for (const auto &fieldPair : it->second) {
-                                if (fieldPair.second == thisFieldIdx && isTainted(fieldPair.first)) {
-                                    return true;
-                                }
-                            }
+                auto it = struct_map.find(base_ptr);
+                if (it != struct_map.end()) {
+                    for (const auto &fieldPair : it->second) {
+                        if (isTainted(fieldPair.first) || isTaintedRecursiveWrapper(fieldPair.first, visited)) {
+                            return true;
                         }
                     }
                 }
@@ -175,32 +181,44 @@ struct TaintTrackerPass : public PassInfoMixin<TaintTrackerPass> { // inheriting
                 if (entry.first == value || isTainted(entry.first)) {
                     for (const auto &field : entry.second) {
                         if (!isTainted(field.first)) {
-                            errs() << "==> Tainting struct field:" << *field.first;
+                            errs() << "==> Tainting struct field:" << *field.first << "\n";
                             markTainted(field.first, Inst);
                         }
                     }
                 }
             }
+            auto *gep = dyn_cast<GetElementPtrInst>(value);
+            if (gep) {
+                Value *base_ptr = gep->getPointerOperand();
+                // if (isTaintedRecursive(base_ptr)) {
+                //     markTainted(value, Inst);
+                // }
+                if (gep->getNumOperands() >= 3) {
+                    if (auto *CI = dyn_cast<ConstantInt>(gep->getOperand(gep->getNumOperands() - 1))) {
+                        // unsigned fieldIdx = CI->getZExtValue();
+                        if (!isTainted(base_ptr)) {
+                            errs() << "==> Tainting base struct due to tainted field:" << *base_ptr;
+                            markTainted(base_ptr, Inst);
+                        }
 
-            // if (auto *GEP = dyn_cast<GetElementPtrInst>(value)) {
-            //     Value *basePtr = GEP->getPointerOperand();
-            //     if (isTaintedRecursive(basePtr)) {
-            //         markTainted(value, Inst);
-            //     }
-            //     if (GEP->getNumOperands() >= 3) {
-            //         if (auto *CI = dyn_cast<ConstantInt>(GEP->getOperand(GEP->getNumOperands() - 1))) {
-            //             unsigned fieldIdx = CI->getZExtValue();
-            //             auto it = struct_map.find(basePtr);
-            //             if (it != struct_map.end()) {
-            //                 for (const auto &fieldPair : it->second) {
-            //                     if (fieldPair.second == fieldIdx && isTainted(fieldPair.first)) {
-            //                         markTainted(value, Inst);
-            //                     }
-            //                 }
-            //             }
-            //         }
-            //     }
-            // }
+                        auto it = struct_map.find(base_ptr);
+                        if (it != struct_map.end()) {
+                            for (const auto &fieldPair : it->second) {
+                                // errs() << "this is fieldIdx: " << fieldIdx << " and this is fieldPair.second: " << fieldPair.second << "\n";
+                                // errs() << "is this tainted? This is *fieldPair.first: " << *fieldPair.first << " and this is fieldPair.second: " << fieldPair.second << "\n";
+                                if (!isTainted(fieldPair.first)) {
+                                    errs() << "==> Tainting related struct field:" << *fieldPair.first;
+                                    markTainted(fieldPair.first, Inst);
+                                }
+                                // if (fieldPair.second == fieldIdx && isTainted(fieldPair.first)) {
+                                //     // errs() << "Recognized!!! we are marking tainted this: " << *value << " and Inst: " << *Inst << "\n";
+                                //     markTainted(value, Inst);
+                                // }
+                            }
+                        }
+                    }
+                }
+            }
 
             if (auto *loadInst = dyn_cast<LoadInst>(value)) { //if this is a pointer thats loaded from the memory --> taint the memory location too!
                 markTainted(loadInst->getPointerOperand(), Inst);
@@ -221,19 +239,13 @@ struct TaintTrackerPass : public PassInfoMixin<TaintTrackerPass> { // inheriting
                         auto *gep = dyn_cast<GetElementPtrInst>(U.get());
                         if(gep) {
                             Value *basePtr = gep->getPointerOperand();
-                    
+                            markTainted(basePtr, CI); 
+                            
                             // taint this specific field, not the entire struct
-                            if (gep->getNumOperands() >= 3) {
-                                auto *inner_ci = dyn_cast<ConstantInt>(gep->getOperand(gep->getNumOperands() - 1));
-                                if(inner_ci) {
-                                    unsigned fieldIdx = inner_ci->getZExtValue();
-                                    
-                                    auto &accesses = struct_map[basePtr];
-                                    for (auto &pair : accesses) {
-                                        if (pair.second == fieldIdx) {
-                                            markTainted(pair.first, CI);
-                                        }
-                                    }
+                            auto it = struct_map.find(basePtr);
+                            if (it != struct_map.end()) {
+                                for (const auto &fieldPair : it->second) {
+                                    markTainted(fieldPair.first, CI);
                                 }
                             }
                         }
@@ -502,9 +514,20 @@ struct TaintTrackerPass : public PassInfoMixin<TaintTrackerPass> { // inheriting
                     }
                 }
             }            
-            // errs() << "Tainted values: \n";
-            // for (auto *val : tainted_values) {
-            //     errs() << *val << "\n";
+            // errs() << "Tainted values in struct map: \n";
+            // for (const auto &entry : struct_map) {
+            //     if (isTaintedRecursive(entry.first)) {
+            //         errs() << "==> Tainted struct base pointer: " << *entry.first << "\n";
+            //         for (const auto &field : entry.second) {
+            //             if (isTaintedRecursive(field.first)) {
+            //                 errs() << "==> Tainted struct field: " << *field.first << "\n";
+            //             }
+            //         }
+            //     }
+            // }
+            // errs() << "Tainted values:\n";
+            // for (const auto &value : tainted_values) {
+            //     errs() << "==> Tainted value: " << *value << "\n";
             // }
             // errs() << "pointer aliases" << "\n";
             // for (const auto &pair : pointer_aliases) {
