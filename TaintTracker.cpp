@@ -100,29 +100,29 @@ struct TaintTrackerPass : public PassInfoMixin<TaintTrackerPass> { // inheriting
                 }
             }
             
+            for (auto &entry : struct_map) {
+                if (entry.first == value) {
+                    for (const auto &field : entry.second) {
+                        if (isTainted(field.first)) return true;
+                    }
+                }
+            }
             // if (auto *loadInst = dyn_cast<LoadInst>(value)) {
             //     if (isTaintedRecursive(loadInst->getPointerOperand())) {
             //         return true;
             //     }
             // }
             
-            if (auto *GEP = dyn_cast<GetElementPtrInst>(value)) {
-                if (isTaintedRecursive(GEP->getPointerOperand())) {
+            auto *gep = dyn_cast<GetElementPtrInst>(value);
+            if (gep) {
+                if (isTaintedRecursive(gep->getPointerOperand())) {
                     return true;
                 }
-                Value *basePtr = GEP->getPointerOperand();
-                for (auto *taintedVal : tainted_values) {
-                    if (auto *otherGEP = dyn_cast<GetElementPtrInst>(taintedVal)) {
-                        if (otherGEP->getPointerOperand() == basePtr) {
-                            return true;
-                        }
-                    }
-                }
-
-                if (GEP->getNumOperands() >= 3) {
-                    if (auto *CI = dyn_cast<ConstantInt>(GEP->getOperand(GEP->getNumOperands() - 1))) {
+                Value *base_ptr = gep->getPointerOperand();
+                if (gep->getNumOperands() >= 3) {
+                    if (auto *CI = dyn_cast<ConstantInt>(gep->getOperand(gep->getNumOperands() - 1))) {
                         unsigned thisFieldIdx = CI->getZExtValue();
-                        auto it = struct_map.find(basePtr);
+                        auto it = struct_map.find(base_ptr);
                         if (it != struct_map.end()) {
                             for (const auto &fieldPair : it->second) {
                                 if (fieldPair.second == thisFieldIdx && isTainted(fieldPair.first)) {
@@ -130,7 +130,6 @@ struct TaintTrackerPass : public PassInfoMixin<TaintTrackerPass> { // inheriting
                                 }
                             }
                         }
-                        return false;
                     }
                 }
             }
@@ -171,6 +170,37 @@ struct TaintTrackerPass : public PassInfoMixin<TaintTrackerPass> { // inheriting
                     tainted_values.insert(pair.second);
                 }
             }
+            
+            for (auto &entry : struct_map) {
+                if (entry.first == value || isTainted(entry.first)) {
+                    for (const auto &field : entry.second) {
+                        if (!isTainted(field.first)) {
+                            errs() << "==> Tainting struct field:" << *field.first;
+                            markTainted(field.first, Inst);
+                        }
+                    }
+                }
+            }
+
+            // if (auto *GEP = dyn_cast<GetElementPtrInst>(value)) {
+            //     Value *basePtr = GEP->getPointerOperand();
+            //     if (isTaintedRecursive(basePtr)) {
+            //         markTainted(value, Inst);
+            //     }
+            //     if (GEP->getNumOperands() >= 3) {
+            //         if (auto *CI = dyn_cast<ConstantInt>(GEP->getOperand(GEP->getNumOperands() - 1))) {
+            //             unsigned fieldIdx = CI->getZExtValue();
+            //             auto it = struct_map.find(basePtr);
+            //             if (it != struct_map.end()) {
+            //                 for (const auto &fieldPair : it->second) {
+            //                     if (fieldPair.second == fieldIdx && isTainted(fieldPair.first)) {
+            //                         markTainted(value, Inst);
+            //                     }
+            //                 }
+            //             }
+            //         }
+            //     }
+            // }
 
             if (auto *loadInst = dyn_cast<LoadInst>(value)) { //if this is a pointer thats loaded from the memory --> taint the memory location too!
                 markTainted(loadInst->getPointerOperand(), Inst);
