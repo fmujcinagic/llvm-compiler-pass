@@ -1,5 +1,8 @@
 #include "../include/TaintTracker.hpp"
 
+TaintTracker::TaintTrackerPass* TaintTracker::TaintTrackerPass::instance = nullptr;
+
+
 using namespace llvm;
 
 const std::set<std::string> sources = {"scanf", "fgets", "read", "copy_from_user", "get_user"}; // I've used normal set here
@@ -148,6 +151,9 @@ namespace TaintTracker {
             assert(value != nullptr && "Desired value is null!");
             if(isTainted(value)) {
                 // errs() << "[!] Already tainted: " << *value << "\n";
+                return;
+            }
+            if(isa<Constant>(value)) {
                 return;
             }
             errs() << "==> Tainting:" << *value;
@@ -414,7 +420,7 @@ namespace TaintTracker {
           
         }
 
-        PreservedAnalyses TaintTrackerPass::run(Module &M, ModuleAnalysisManager &AM) { 
+        PreservedAnalyses TaintTracker::TaintTrackerPass::run(Module &M, ModuleAnalysisManager &AM) {
             errs() << "-----------------Taint Tracker-----------------\n";
 
             errs() << " --- ALIAS (AND STRUCT) TRACKING STARTED! ---\n";
@@ -495,11 +501,16 @@ namespace TaintTracker {
                             if (CI->getCalledFunction() != nullptr) {
                                 llvm::StringRef func_name = CI->getCalledFunction()->getName();
                                 if(contains(func_name, sinks)) {
-                                    for (auto &arg : CI->args()) {
-                                        if (isTaintedRecursive(arg)) {
-                                            errs() << Colors::RED << "WARNING: Tainted value reached sink: " << func_name << Colors::RESET;
-                                            if (&Inst) TaintAnalysis::Helpers::printDebugInfo(&Inst);
+                                    if(func_name.contains("memset")) {
+                                        if(TaintAnalysis::Helpers::isMemset(CI) == false) {
+                                            continue; // skip this memset, its not a sink
                                         }
+                                    }
+                                        for (auto &arg : CI->args()) {
+                                            if (isTaintedRecursive(arg)) {
+                                                errs() << Colors::RED << "WARNING: Tainted value reached sink: " << func_name << Colors::RESET;
+                                                if (&Inst) TaintAnalysis::Helpers::printDebugInfo(&Inst);
+                                            }
                                     }
                                 } 
                             }
@@ -529,6 +540,7 @@ namespace TaintTracker {
             
             errs() << "--------------- Taint Tracking Complete ---------------\n";
             return PreservedAnalyses::all();
+        
         };
 
 }

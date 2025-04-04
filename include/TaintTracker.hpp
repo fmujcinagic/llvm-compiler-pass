@@ -9,8 +9,16 @@
 #include "../include/Helpers.hpp"
 
 namespace TaintTracker {
-    struct TaintTrackerPass : public llvm::PassInfoMixin<TaintTrackerPass> { // inheriting from PassInfoMixin, modern way to write LLVM passes (for LLVM >= 11)
+    struct TaintTrackerPass : public llvm::PassInfoMixin<TaintTrackerPass> { // inheriting from PassInfoMixin, modern way to write LLVM passes (for LLVM >= 11)        
     public:
+        TaintTrackerPass() = default;
+        static TaintTrackerPass* instance;    
+        static TaintTrackerPass* GetInstance() {
+            if (!instance) {
+                instance = new TaintTrackerPass();
+            }
+            return instance;
+        }
         llvm::PreservedAnalyses run(llvm::Module &M, llvm::AnalysisManager<llvm::Module> &AM);
         void markTainted(llvm::Value* value, llvm::Instruction *Inst);
         bool isTainted(llvm::Value* value);

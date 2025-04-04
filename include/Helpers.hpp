@@ -9,7 +9,7 @@ namespace TaintAnalysis {
     class Helpers {
         public:
             static void printDebugInfo(llvm::Instruction *Inst);
-            // static bool isMemset(CallInst *CI);
+            static bool isMemset(llvm::CallInst *CI);
     };
 }
 namespace Colors {
