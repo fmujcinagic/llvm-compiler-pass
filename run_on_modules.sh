@@ -24,7 +24,9 @@ if [ "$2" == "--in-tree" ]; then
     cd "$KERNEL_SRC"
     make LLVM=1 "$SOURCE_FILE"
     MODULE_KO="${SOURCE_FILE%.*}.ko"
-    "$LLVM_DIR/bin/llvm-objdump" --dump-section=llvmir="$OUTPUT_IR" "$MODULE_KO"
+    # "$LLVM_DIR/bin/llvm-objdump" --dump-section=llvmir="$OUTPUT_IR" "$MODULE_KO"
+    "$LLVM_DIR/bin/clang" -emit-llvm -S -O0 -g -o "$OUTPUT_IR" "$SOURCE_FILE"
+
 else
     echo "[+] CUSTOM MODULE: $SOURCE_FILE"
     KERNEL_HEADERS="/lib/modules/$(uname -r)/build"
