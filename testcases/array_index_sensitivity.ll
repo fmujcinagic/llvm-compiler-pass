@@ -50,7 +50,7 @@ attributes #2 = { nocallback nofree nounwind willreturn memory(argmem: readwrite
 
 !0 = !DIGlobalVariableExpression(var: !1, expr: !DIExpression())
 !1 = distinct !DIGlobalVariable(scope: null, file: !2, line: 9, type: !3, isLocal: true, isDefinition: true)
-!2 = !DIFile(filename: "testcases/array_index_sensitivity.c", directory: "/home/faris/Documents/thesis/taint-tracker", checksumkind: CSK_MD5, checksum: "214b3e30f283a79d8e69bd933a7202f8")
+!2 = !DIFile(filename: "testcases/array_index_sensitivity.c", directory: "/home/faris/Documents/thesis/taint-tracker", checksumkind: CSK_MD5, checksum: "f1c933a5c44a9137ae27113c1ddef5ed")
 !3 = !DICompositeType(tag: DW_TAG_array_type, baseType: !4, size: 24, elements: !5)
 !4 = !DIBasicType(name: "char", size: 8, encoding: DW_ATE_signed_char)
 !5 = !{!6}

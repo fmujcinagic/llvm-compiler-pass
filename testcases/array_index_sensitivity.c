@@ -14,7 +14,7 @@ int main() {
 
     memcpy(&target[0], &data[0], sizeof(int));  // should not be flagged
 
-    memcpy(target, data, sizeof(data));  // Bulk copy - should be flagged if taint is propagated to the entire array
+    memcpy(target, data, sizeof(data)); 
 
     return 0;
 }
