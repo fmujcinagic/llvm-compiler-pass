@@ -5,7 +5,7 @@ fi
 
 SOURCE_FILE="$1"
 BASE_NAME=$(basename "$SOURCE_FILE" .c)
-LLVM_IR="testcases/${BASE_NAME}.ll"
+LLVM_IR="testcases_ll/${BASE_NAME}.ll"
 mkdir -p build && cd build
 cmake -DLLVM_DIR="$LLVM_DIR/lib/cmake/llvm" ..
 make

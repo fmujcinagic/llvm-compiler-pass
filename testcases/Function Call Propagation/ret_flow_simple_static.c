@@ -2,7 +2,7 @@
 #include <string.h>
 
 char *get_user() {      
-    char buf[64];
+    static  char buf[64];
     scanf("%s", buf);
     return buf;        
 }
