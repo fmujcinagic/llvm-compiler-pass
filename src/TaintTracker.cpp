@@ -336,7 +336,6 @@ namespace TaintTracker {
             if (auto *callInst = dyn_cast<CallInst>(&Inst)) {
                 Function *calledFunc = callInst->getCalledFunction();
                 if (calledFunc && !calledFunc->isDeclaration()) {
-
                     for (unsigned i = 0; i < callInst->arg_size() && i < calledFunc->arg_size(); i++) {
                         Value *arg = callInst->getArgOperand(i);
                         if (isTaintedRecursive(arg)) {

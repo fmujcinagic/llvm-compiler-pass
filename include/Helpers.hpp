@@ -10,6 +10,7 @@ namespace TaintAnalysis {
         public:
             static void printDebugInfo(llvm::Instruction *Inst);
             static bool isMemset(llvm::CallInst *CI);
+            // static bool isSizeMismatch(llvm::CallInst *CI, llvm::DenseMap<llvm::Value*, std::vector<std::pair<Value*, int>>> struct_map);
     };
 }
 namespace Colors {
