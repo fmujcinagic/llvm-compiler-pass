@@ -1,5 +1,5 @@
-; ModuleID = 'testcases/union.c'
-source_filename = "testcases/union.c"
+; ModuleID = 'testcases/Structs, Unions and Nested Data Types/union_basic.c'
+source_filename = "testcases/Structs, Unions and Nested Data Types/union_basic.c"
 target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-pc-linux-gnu"
 
@@ -49,7 +49,7 @@ attributes #4 = { nounwind }
 
 !0 = !DIGlobalVariableExpression(var: !1, expr: !DIExpression())
 !1 = distinct !DIGlobalVariable(scope: null, file: !2, line: 12, type: !3, isLocal: true, isDefinition: true)
-!2 = !DIFile(filename: "testcases/union.c", directory: "/home/faris/Documents/thesis/taint-tracker", checksumkind: CSK_MD5, checksum: "05e406014e9afd489161044f7dda47cb")
+!2 = !DIFile(filename: "testcases/Structs, Unions and Nested Data Types/union_basic.c", directory: "/home/faris/Documents/thesis/taint-tracker", checksumkind: CSK_MD5, checksum: "05e406014e9afd489161044f7dda47cb")
 !3 = !DICompositeType(tag: DW_TAG_array_type, baseType: !4, size: 24, elements: !5)
 !4 = !DIBasicType(name: "char", size: 8, encoding: DW_ATE_signed_char)
 !5 = !{!6}
